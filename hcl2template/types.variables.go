@@ -200,6 +200,12 @@ func (variables *Variables) decodeVariableBlock(block *hcl.Block, ectx *hcl.Eval
 		})
 	}
 
+	// It's possible no type attribute was assigned so lets make
+	// sure we have a valid type otherwise there will be issues parsing the value.
+	if res.Type == cty.NilType {
+		res.Type = res.DefaultValue.Type()
+	}
+
 	(*variables)[block.Labels[0]] = res
 
 	return diags
@@ -233,15 +239,13 @@ func (variables Variables) collectVariableValues(env []string, files []*hcl.File
 			continue
 		}
 
-		fakeFilename := fmt.Sprintf("<value for var.%s from env>", name)
-		expr, moreDiags := hclsyntax.ParseExpression([]byte(value), fakeFilename, hcl.Pos{Line: 1, Column: 1})
+		expr, moreDiags := expressionFromVariableDefinition(name, value, variable.Type)
 		diags = append(diags, moreDiags...)
 		if moreDiags.HasErrors() {
 			continue
 		}
 		val, valDiags := expr.Value(nil)
 		diags = append(diags, valDiags...)
-
 		if variable.Type != cty.NilType {
 			var err error
 			val, err = convert.Convert(val, variable.Type)
@@ -255,7 +259,6 @@ func (variables Variables) collectVariableValues(env []string, files []*hcl.File
 				val = cty.DynamicVal
 			}
 		}
-
 		variable.EnvValue = val
 	}
 
@@ -347,12 +350,12 @@ func (variables Variables) collectVariableValues(env []string, files []*hcl.File
 			continue
 		}
 
-		fakeFilename := fmt.Sprintf("<value for var.%s from arguments>", name)
-		expr, moreDiags := hclsyntax.ParseExpression([]byte(value), fakeFilename, hcl.Pos{Line: 1, Column: 1})
+		expr, moreDiags := expressionFromVariableDefinition(name, value, variable.Type)
 		diags = append(diags, moreDiags...)
 		if moreDiags.HasErrors() {
 			continue
 		}
+
 		val, valDiags := expr.Value(nil)
 		diags = append(diags, valDiags...)
 
@@ -374,4 +377,14 @@ func (variables Variables) collectVariableValues(env []string, files []*hcl.File
 	}
 
 	return diags
+}
+
+func expressionFromVariableDefinition(name string, value string, variableType cty.Type) (hclsyntax.Expression, hcl.Diagnostics) {
+	switch variableType {
+	case cty.String, cty.Number:
+		return &hclsyntax.LiteralValueExpr{Val: cty.StringVal(value)}, nil
+	default:
+		fakeFilename := fmt.Sprintf("<value for var.%s from arguments>", name)
+		return hclsyntax.ParseExpression([]byte(value), fakeFilename, hcl.Pos{Line: 1, Column: 1})
+	}
 }
